@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<extension id="modules_installer" xmlns="http://symphony-cms.com/schemas/extension/1.0">
+	<name>Modules Installer</name>
+	<description>A simple extension which helps with the installation of Modules</description>
+	<repo type="github"></repo>
+	<types>
+		<type>Select a type...</type>
+	</types>
+	<authors>
+		<author>
+			<name>Giel Berkers</name>
+			<email>info@gielberkers.com</email>
+			<website>http://www.gielberkers.com</website>
+		</author>
+	</authors>
+	<releases>
+		<release version="1.0.2" date="2012-10-29" min="2.3" />
+	</releases>
+</extension>
