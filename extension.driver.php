@@ -126,7 +126,9 @@ class Extension_Modules_installer extends Extension {
 	 */
 	private function makeModularDataSource($dsName)
 	{
-		$content = file_get_contents(DATASOURCES.'/data.'.$dsName.'.php');
+		$filename = DATASOURCES.'/data.'.$dsName.'.php';
+
+		$content = file_get_contents($filename);
 
 		// getSource function:
 		// Get the handle of the used section:
@@ -137,12 +139,54 @@ class Extension_Modules_installer extends Extension {
 		$content = $this->searchAndReplaceGetSource($content, $id,
 			'SectionManager::fetchIDFromHandle(\''.$handle.'\')');
 
+		// Group by:
+		$content = $this->updateGroupBy($content);
+
 		// Filters:
 		$filters = $this->getFilters($content);
-		print_r($filters);
+		$content = $this->injectRequireOnce($content, 'TOOLKIT.\'/class.sectionmanager.php\'');
+		$code = '
+		$sectionID = SectionManager::fetchIDFromHandle(\''.$handle.'\');
+		$this->dsParamFILTERS = array(
+';
+		foreach($filters as $key => $value) {
+			if(is_numeric($key)) {
+				$field = FieldManager::fetch($key);
+				$code .= "\t\t\t".'FieldManager::fetchFieldIDFromElementName(\''.$field->get('element_name').'\', $sectionID) => \''.$value.'\','."\n";
+			} else {
+				$code .= '\''.$key.'\' => \''.$value.'\','."\n";
+			}
+		}
+		$code .= '		);';
+		$content = $this->injectConstructorCode($content, $code);
 
-		echo '<xmp>'.$content;
-		die();
+		file_put_contents($filename, $content);
+
+		redirect('/symphony/blueprints/datasources/');
+	}
+
+	/**
+	 * Inject code in the constructor
+	 * @param $str
+	 * @param $code
+	 * @return mixed
+	 */
+	private function injectConstructorCode($str, $code)
+	{
+		preg_match('/public function __construct\((.*)\)\s*\{\s*(.*)\s*}/msU', $str, $matches);
+		$str = str_replace($matches[2], $code."\n".$matches[2], $str);
+		return $str;
+	}
+
+	/**
+	 * Inject a require_once statement in the code:
+	 * @param $str
+	 * @param $file
+	 * @return string
+	 */
+	private function injectRequireOnce($str, $file)
+	{
+		return str_replace('<?php', '<?php require_once('.$file.');'."\n", $str);
 	}
 
 	/**
@@ -154,7 +198,7 @@ class Extension_Modules_installer extends Extension {
 	 */
 	private function searchAndReplaceGetSource($str, $old, $new)
 	{
-		$str = preg_replace('/public function getSource\(\)\{\s+return \''.$old.'\';(.*)\s}/msU',
+		$str = preg_replace('/public function getSource\(\)\s*\{\s*return \''.$old.'\';(.*)\s*}/msU',
 			"public function getSource(){\n\t\t\treturn $new;\n\t\t}", $str);
 		return $str;
 	}
@@ -166,7 +210,7 @@ class Extension_Modules_installer extends Extension {
 	 */
 	private function getSourceId($str)
 	{
-		$str = preg_match('/public function getSource\(\)\{\s+return \'(.*)\';(.*)\s}/msU', $str, $matches);
+		preg_match('/public function getSource\(\)\s*\{\s*return \'(.*)\';(.*)\s*}/msU', $str, $matches);
 		return $matches[1];
 	}
 
@@ -177,13 +221,18 @@ class Extension_Modules_installer extends Extension {
 	 */
 	private function getAllowEditorToParse($str)
 	{
-		$str = preg_match('/public function allowEditorToParse\(\)\{\s+return (.*);(.*)\s}/msU', $str, $matches);
+		preg_match('/public function allowEditorToParse\(\)\s*\{\s*return (.*);(.*)\s*}/msU', $str, $matches);
 		return $matches[1] == 'true';
 	}
 
+	/**
+	 * Get the filters:
+	 * @param $str
+	 * @return array
+	 */
 	private function getFilters($str)
 	{
-		$str = preg_match('/public \$dsParamFILTERS = array\(\s+(.*)\s+\);/msU', $str, $matches);
+		preg_match('/public \$dsParamFILTERS = array\(\s*(.*)\s*\);/msU', $str, $matches);
 		$filters = explode(',', $matches[1]);
 		$arr = array();
 		foreach($filters as $filter)
@@ -200,6 +249,20 @@ class Extension_Modules_installer extends Extension {
 		return $arr;
 	}
 
+	private function updateGroupBy($str)
+	{
+		preg_match('/public \$dsParamGROUP = (.*);/msU', $str, $matches);
+		if(!empty($matches))
+		{
+			$id = trim(str_replace('\'', '', $matches[1]));
+			$field = FieldManager::fetch($id);
+			$str = $this->injectConstructorCode($str, '
+		$this->dsParamGROUP = FieldManager::fetchFieldIDFromElementName(\''.$field->get('element_name').'\', $sectionID);
+			');
+		}
+		return $str;
+	}
+
 	/**
 	 * Check if the data source is modular
 	 * @param $dsName
@@ -214,7 +277,8 @@ class Extension_Modules_installer extends Extension {
 				return self::DS_PARSE_TRUE;
 			}
 			// Check if the file already is modular:
-			if(!is_numeric($this->getSourceId($content))) {
+
+			if(is_null($this->getSourceId($content))) {
 				return self::IS_MODULAR;
 			}
 			return self::CAN_BE_MODULAR;
