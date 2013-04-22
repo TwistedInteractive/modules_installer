@@ -68,13 +68,18 @@ class Extension_Modules_installer extends Extension {
 	public function actionAdminPagePreGenerate($context)
 	{
 		$callback = Administration::instance()->getPageCallback();
-		if($callback['driver'] == 'blueprintsdatasources')
+		if($callback['driver'] == 'blueprintsdatasources' || $callback['driver'] == 'blueprintsevents')
 		{
 			// Check if there are actions set:
 			if(isset($_GET['make-modular-ds']))
 			{
 				$this->makeModularDataSource($_GET['make-modular-ds']);
 			}
+
+            if(isset($_GET['make-modular-event']))
+            {
+                $this->makeModularEvent($_GET['make-modular-event']);
+            }
 
 			if(!empty($callback['context']))
 			{
@@ -97,11 +102,19 @@ class Extension_Modules_installer extends Extension {
 				{
 					$elementName = $row->getChild(0)->getChild(0)->getAttribute('title');
 
-					$check = $this->checkIfModularDatasource($elementName);
+                    if($callback['driver'] == 'blueprintsdatasources')
+                    {
+					    $check = $this->checkIfModularDatasource($elementName);
+                        $linkName = 'make-modular-ds';
+                    } else {
+                        $check = $this->checkIfModularEvent($elementName);
+                        $linkName = 'make-modular-event';
+                    }
+
 					$class = 'inactive';
 					if($check == self::CAN_BE_MODULAR)
 					{
-						$anchor = Widget::Anchor(__('No'), '?make-modular-ds='.$elementName);
+						$anchor = Widget::Anchor(__('No'), '?'.$linkName.'='.$elementName);
 						$class = '';
 					} elseif($check == self::DS_PARSE_TRUE) {
 						$anchor = new XMLElement('span', __('-'), array('title' => 'Cannot be made modular automatically (allowEditorToParse returns false)'));
@@ -149,7 +162,8 @@ class Extension_Modules_installer extends Extension {
 		$sectionID = SectionManager::fetchIDFromHandle(\''.$handle.'\');
 		$this->dsParamFILTERS = array(
 ';
-		foreach($filters as $key => $value) {
+
+        foreach($filters as $key => $value) {
 			if(is_numeric($key)) {
 				$field = FieldManager::fetch($key);
 				$code .= "\t\t\t".'FieldManager::fetchFieldIDFromElementName(\''.$field->get('element_name').'\', $sectionID) => \''.$value.'\','."\n";
@@ -164,6 +178,41 @@ class Extension_Modules_installer extends Extension {
 
 		redirect('/symphony/blueprints/datasources/');
 	}
+
+    /**
+     * Make event modular
+     * @param $eventName
+     */
+    private function makeModularEvent($eventName)
+    {
+        $filename = EVENTS.'/event.'.$eventName.'.php';
+
+        $content = file_get_contents($filename);
+
+        // getSource function:
+        // Get the handle of the used section:
+        $id = $this->getSourceId($content);
+        $handle = SectionManager::fetch($id)->get('handle');
+
+        // Replace it:
+        $content = $this->searchAndReplaceGetSource($content, $id,
+            'SectionManager::fetchIDFromHandle(\''.$handle.'\')');
+
+        // Group by:
+        $content = $this->updateGroupBy($content);
+
+        $content = $this->injectRequireOnce($content, 'TOOLKIT.\'/class.sectionmanager.php\'');
+        $code = '
+		$sectionID = SectionManager::fetchIDFromHandle(\''.$handle.'\');
+		$this->dsParamFILTERS = array(
+';
+
+        $content = $this->injectConstructorCode($content, $code);
+
+        file_put_contents($filename, $content);
+
+        redirect('/symphony/blueprints/events/');
+    }
 
 	/**
 	 * Inject code in the constructor
@@ -198,8 +247,8 @@ class Extension_Modules_installer extends Extension {
 	 */
 	private function searchAndReplaceGetSource($str, $old, $new)
 	{
-		$str = preg_replace('/public function getSource\(\)\s*\{\s*return \''.$old.'\';(.*)\s*}/msU',
-			"public function getSource(){\n\t\t\treturn $new;\n\t\t}", $str);
+		$str = preg_replace('/public (|static )function getSource\(\)\s*\{\s*return \''.$old.'\';(.*)\s*}/msU',
+			"public \\1function getSource(){\n\t\t\treturn $new;\n\t\t}", $str);
 		return $str;
 	}
 
@@ -210,8 +259,8 @@ class Extension_Modules_installer extends Extension {
 	 */
 	private function getSourceId($str)
 	{
-		preg_match('/public function getSource\(\)\s*\{\s*return \'(.*)\';(.*)\s*}/msU', $str, $matches);
-		return $matches[1];
+		preg_match('/public (|static )function getSource\(\)\s*\{\s*return \'(.*)\';(.*)\s*}/msU', $str, $matches);
+		return $matches[2];
 	}
 
 	/**
@@ -221,8 +270,8 @@ class Extension_Modules_installer extends Extension {
 	 */
 	private function getAllowEditorToParse($str)
 	{
-		preg_match('/public function allowEditorToParse\(\)\s*\{\s*return (.*);(.*)\s*}/msU', $str, $matches);
-		return $matches[1] == 'true';
+		preg_match('/public (|static )function allowEditorToParse\(\)\s*\{\s*return (.*);(.*)\s*}/msU', $str, $matches);
+		return $matches[2] == 'true';
 	}
 
 	/**
@@ -233,7 +282,9 @@ class Extension_Modules_installer extends Extension {
 	private function getFilters($str)
 	{
 		preg_match('/public \$dsParamFILTERS = array\(\s*(.*)\s*\);/msU', $str, $matches);
-		$filters = explode(',', $matches[1]);
+        // Seperate the filters (seperate by quote-comma, to prevent splitting commas in filter values):
+		$filters = explode('\',', $matches[1]);
+
 		$arr = array();
 		foreach($filters as $filter)
 		{
@@ -286,4 +337,28 @@ class Extension_Modules_installer extends Extension {
 			return self::NO_FILE_FOUND;
 		}
 	}
+
+    /**
+     * Check if an event is modular
+     * @param $eventName
+     * @return int
+     */
+    private function checkIfModularEvent($eventName)
+    {
+        if(file_exists(EVENTS.'/event.'.$eventName.'.php'))
+        {
+            $content = file_get_contents(EVENTS.'/event.'.$eventName.'.php');
+            if($this->getAllowEditorToParse($content) == false) {
+                return self::DS_PARSE_TRUE;
+            }
+            // Check if the file already is modular:
+
+            if(is_null($this->getSourceId($content))) {
+                return self::IS_MODULAR;
+            }
+            return self::CAN_BE_MODULAR;
+        } else {
+            return self::NO_FILE_FOUND;
+        }
+    }
 }
