@@ -24,9 +24,8 @@ class Extension_Modules_installer extends Extension {
 			'release-date'	=> '2012-10-29',
 			'author'		=> array(
 				array(
-					'name' => 'Giel Berkers',
-					'website' => 'http://www.gielberkers.com',
-					'email' => 'info@gielberkers.com'
+					'name' => 'Twisted Interactive',
+					'website' => 'http://www.twisted.nl'
 				)
 			)
 		);
